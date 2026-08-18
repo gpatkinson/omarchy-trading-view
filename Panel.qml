@@ -257,10 +257,7 @@ Panel {
   function startSearch() {
     var query = searchField.text.trim()
     searchProc.command = ["curl", "-sS", "--max-time", "5",
-      "-X", "POST",
-      "-H", "Content-Type: application/x-www-form-urlencoded",
-      Model.searchUrl(),
-      "-d", Model.searchBody(query, "")]
+      Model.searchUrl(query, "")]
     searchProc.running = true
   }
 
