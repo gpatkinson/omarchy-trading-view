@@ -57,19 +57,14 @@ Panel {
 
   // ---- State ----
 
-  // Watchlist entries: [{"symbol":"AAPL","exchange":"NASDAQ","screener":"america","description":"Apple Inc."}, ...]
   property var watchlist: []
-  // Scan results keyed by "EXCHANGE:SYMBOL": {"NASDAQ:AAPL": {"price":187.32,"changePct":1.23,...}, ...}
   property var scanResults: ({})
-  // Pending screener fetches — when all complete, results merge into scanResults
   property int pendingFetches: 0
   property int fetchRetries: 0
-  // Symbol search state
+  // Symbol add state
   property bool addingSymbol: false
-  property var searchResults: []
-  property int selectedResultIndex: 0
-  property string searchQuery: ""
-  property bool enterPendingSearch: false  // true when user hit Enter before results arrived
+  property bool resolvingSymbol: false
+  property string resolveError: ""
   // UI state
   property bool loading: false
   readonly property int maxSymbols: 10
@@ -93,7 +88,6 @@ Panel {
     }
   }
 
-  // Catch startup race where first read happens before FS is ready
   Timer {
     interval: 1500
     running: true
@@ -112,7 +106,7 @@ Panel {
 
   Process { id: watchlistSaveProc }
 
-  // ---- Data fetching ----
+  // ---- Data fetching (price quotes) ----
 
   function refresh() {
     if (watchlist.length === 0) return
@@ -128,9 +122,6 @@ Panel {
       return
     }
 
-    // We reuse a single Process per screener group. Since QML doesn't allow
-    // dynamic Process creation easily, we fetch screener groups sequentially
-    // using a queue. For the common case (1-3 screeners), this is fast.
     fetchQueue = screenerList
     fetchResultsAccumulator = []
     startNextFetch()
@@ -141,7 +132,6 @@ Panel {
 
   function startNextFetch() {
     if (fetchQueue.length === 0) {
-      // All fetches complete — merge results
       scanResults = Model.mergeScanResults(fetchResultsAccumulator)
       loading = false
       fetchResultsAccumulator = []
@@ -152,7 +142,6 @@ Panel {
     fetchQueue = fetchQueue.slice(1)
     pendingFetches++
 
-    // Build curl command: POST to scanner endpoint with JSON body
     var tickers = Model.groupByScreener(watchlist)[screener]
     if (!tickers || tickers.length === 0) {
       startNextFetch()
@@ -165,7 +154,6 @@ Panel {
       "curl", "-sS", "--max-time", "10",
       "-X", "POST",
       "-H", "Content-Type: application/json",
-      "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
       "-d", body,
       url
     ]
@@ -212,7 +200,6 @@ Panel {
     onTriggered: if (watchlist.length > 0) root.refresh()
   }
 
-  // Auto-refresh every 15 minutes
   Timer {
     id: refreshTimer
     interval: 15 * 60 * 1000
@@ -222,13 +209,19 @@ Panel {
     onTriggered: root.refresh()
   }
 
-  // ---- Symbol search ----
+  // ---- Symbol resolution via scanner ----
+  // Instead of a search API, we try the scanner directly with common exchanges.
+  // User types "AAPL" -> we try NASDAQ:AAPL, NYSE:AAPL, AMEX:AAPL on the
+  // america screener. For crypto we try BINANCE:, BITSTAMP: on crypto screener.
+
+  property var resolveQueue: []
+  property string resolveSymbol: ""
+  property string resolveType: ""
 
   function startAddSymbol() {
     addingSymbol = true
-    searchResults = []
-    selectedResultIndex = 0
-    searchQuery = ""
+    resolvingSymbol = false
+    resolveError = ""
     Qt.callLater(function() {
       searchField.text = ""
       searchField.forceActiveFocus()
@@ -237,80 +230,149 @@ Panel {
 
   function cancelAddSymbol() {
     addingSymbol = false
-    searchResults = []
-    selectedResultIndex = 0
-    searchQuery = ""
-    enterPendingSearch = false
+    resolvingSymbol = false
+    resolveError = ""
+    resolveQueue = []
     searchDebounce.stop()
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
   }
 
-  function requestSearch() {
-    var query = searchField.text.trim()
-    if (query.length < 1) {
-      searchResults = []
-      return
+  // Called when user hits Enter in the search field
+  function resolveSymbolFromInput() {
+    var input = searchField.text.trim()
+    if (input.length < 1) return
+
+    // Check if user typed a full EXCHANGE:SYMBOL format
+    var colonIdx = input.indexOf(":")
+    if (colonIdx > 0) {
+      var exch = input.substring(0, colonIdx).toUpperCase()
+      var sym = input.substring(colonIdx + 1).toUpperCase()
+      resolveQueue = [{ exchange: exch, symbol: sym, screener: Model.screenerForExchange(exch, "") }]
+      resolveSymbol = sym
+      resolveType = ""
+    } else {
+      // Build a list of exchange candidates to try
+      resolveSymbol = input.toUpperCase()
+      resolveType = ""
+      resolveQueue = Model.buildResolveQueue(input.toUpperCase())
     }
-    searchQuery = query
-    if (!searchProc.running) startSearch()
+
+    resolveError = ""
+    resolvingSymbol = true
+    tryNextResolve()
   }
 
-  function startSearch() {
-    var query = searchField.text.trim()
-    searchProc.command = ["curl", "-sS", "--max-time", "5",
-      "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
-      Model.yahooSearchUrl(query)]
-    searchProc.running = true
+  function tryNextResolve() {
+    if (resolveQueue.length === 0) {
+      resolvingSymbol = false
+      resolveError = "Symbol not found: " + resolveSymbol
+      return
+    }
+
+    var candidate = resolveQueue[0]
+    resolveQueue = resolveQueue.slice(1)
+
+    var ticker = candidate.exchange + ":" + candidate.symbol
+    var body = Model.scannerBody([ticker])
+    var url = Model.scannerUrl(candidate.screener)
+
+    resolveProc.command = [
+      "curl", "-sS", "--max-time", "5",
+      "-X", "POST",
+      "-H", "Content-Type: application/json",
+      "-d", body,
+      url
+    ]
+    resolveProc.running = true
   }
 
   Process {
-    id: searchProc
+    id: resolveProc
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        searchResults = Model.parseYahooSearch(text)
-        selectedResultIndex = 0
-        // If user pressed Enter while search was in flight, auto-add first result
-        if (root.enterPendingSearch && searchResults.length > 0) {
-          root.enterPendingSearch = false
-          root.addSymbolFromSearch(0)
-        } else {
-          root.enterPendingSearch = false
+        var raw = String(text || "").trim()
+        if (!raw) {
+          tryNextResolve()
+          return
         }
+        try {
+          var parsed = Model.parseScanResponse(raw)
+          var key = resolveQueue.length > 0
+            ? (resolveQueue[0 - 1] ? "" : "") // placeholder
+            : ""
+          // Check if we got data for any ticker
+          var found = false
+          var foundKey = ""
+          for (var k in parsed) {
+            if (parsed.hasOwnProperty(k)) {
+              found = true
+              foundKey = k
+              break
+            }
+          }
+
+          if (found) {
+            // Extract exchange from the key (EXCHANGE:SYMBOL)
+            var parts = foundKey.split(":")
+            var exchange = parts.length > 1 ? parts[0] : ""
+            var symbol = parts.length > 1 ? parts[1] : resolveSymbol
+
+            // Get the description from the scan result
+            var result = parsed[foundKey]
+            var description = result.symbol || symbol
+
+            addResolvedSymbol(exchange, symbol, Model.screenerForExchange(exchange, ""), description)
+          } else {
+            // This exchange didn't have it — try next
+            tryNextResolve()
+          }
+        } catch (e) {
+          tryNextResolve()
+        }
+      }
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        tryNextResolve()
       }
     }
   }
 
-  Timer {
-    id: searchDebounce
-    interval: 300
-    onTriggered: root.requestSearch()
-  }
-
-  function addSymbolFromSearch(index) {
-    if (index < 0 || index >= searchResults.length) return
-    var entry = searchResults[index]
-    if (watchlist.length >= maxSymbols) return
+  function addResolvedSymbol(exchange, symbol, screener, description) {
+    if (watchlist.length >= maxSymbols) {
+      resolvingSymbol = false
+      resolveError = "Watchlist full (max " + maxSymbols + ")"
+      return
+    }
 
     // Check for duplicates
     for (var i = 0; i < watchlist.length; i++) {
-      if (watchlist[i].symbol.toUpperCase() === entry.symbol.toUpperCase() &&
-          watchlist[i].exchange.toUpperCase() === entry.exchange.toUpperCase()) {
+      if (watchlist[i].symbol.toUpperCase() === symbol.toUpperCase() &&
+          watchlist[i].exchange.toUpperCase() === exchange.toUpperCase()) {
         cancelAddSymbol()
         return
       }
     }
 
     var newEntry = {
-      symbol: entry.symbol,
-      exchange: entry.exchange,
-      screener: entry.screener,
-      description: entry.description
+      symbol: symbol,
+      exchange: exchange,
+      screener: screener,
+      description: description
     }
     watchlist = watchlist.concat([newEntry])
     persistWatchlist()
     cancelAddSymbol()
     Qt.callLater(refresh)
+  }
+
+  Timer {
+    id: searchDebounce
+    interval: 300
+    onTriggered: {
+      // No-op — we only resolve on Enter now, not on type
+    }
   }
 
   function removeSymbol(index) {
@@ -363,9 +425,9 @@ Panel {
       anchors.fill: parent
       blocked: root.addingSymbol
       onReturnRequested: {
-        if (root.addingSymbol && root.searchResults.length > 0)
-          root.addSymbolFromSearch(root.selectedResultIndex)
-        else if (root.addingSymbol)
+        if (root.addingSymbol && !root.resolvingSymbol)
+          root.resolveSymbolFromInput()
+        else if (root.addingSymbol && root.resolvingSymbol)
           root.cancelAddSymbol()
       }
       onCloseRequested: root.close()
@@ -415,7 +477,6 @@ Panel {
               }
             }
 
-            // Add symbol button (top-right)
             Text {
               anchors.right: parent.right
               anchors.rightMargin: Style.space(16)
@@ -436,10 +497,10 @@ Panel {
             }
           }
 
-          // ---- Add symbol search bar ----
+          // ---- Add symbol input ----
           Item {
             width: parent.width
-            height: root.addingSymbol ? (searchField.height + Style.space(8) + searchResultsColumn.height) : 0
+            height: root.addingSymbol ? (searchField.height + Style.space(6) + resolveStatusText.height) : 0
             visible: root.addingSymbol
 
             Column {
@@ -450,89 +511,24 @@ Panel {
                 id: searchField
                 width: parent.width - Style.space(32)
                 anchors.horizontalCenter: parent.horizontalCenter
-                placeholderText: "Search symbol (e.g. AAPL, BTCUSD, EURUSD)..."
-                onTextChanged: searchDebounce.restart()
-                onAccepted: {
-                  if (root.searchResults.length > 0) {
-                    root.addSymbolFromSearch(root.selectedResultIndex)
-                  } else {
-                    // No results yet — fire search immediately, auto-add
-                    // first result when search completes
-                    searchDebounce.stop()
-                    root.enterPendingSearch = true
-                    root.requestSearch()
-                  }
-                }
-                Keys.onDownPressed: {
-                  if (root.selectedResultIndex < root.searchResults.length - 1)
-                    root.selectedResultIndex++
-                }
-                Keys.onUpPressed: {
-                  if (root.selectedResultIndex > 0)
-                    root.selectedResultIndex--
-                }
+                placeholderText: "Type ticker (e.g. AAPL, TSLA, BTCUSD) and press Enter..."
+                enabled: !root.resolvingSymbol
+                onAccepted: root.resolveSymbolFromInput()
                 Keys.onEscapePressed: root.cancelAddSymbol()
               }
 
-              Column {
-                id: searchResultsColumn
+              Text {
+                id: resolveStatusText
                 width: parent.width - Style.space(32)
                 anchors.horizontalCenter: parent.horizontalCenter
-                spacing: 1
-                visible: root.searchResults.length > 0
-
-                Repeater {
-                  model: root.searchResults.length > 5 ? 5 : root.searchResults.length
-
-                  Rectangle {
-                    width: parent.width
-                    height: Style.space(36)
-                    color: index === root.selectedResultIndex ? Color.bar.active : "transparent"
-
-                    Row {
-                      anchors.fill: parent
-                      anchors.leftMargin: Style.space(8)
-                      spacing: Style.space(6)
-
-                      Text {
-                        text: modelData < root.searchResults.length ? root.searchResults[modelData].symbol : ""
-                        color: root.barForeground
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.body
-                        font.bold: true
-                        anchors.verticalCenter: parent.verticalCenter
-                      }
-
-                      Text {
-                        text: modelData < root.searchResults.length
-                          ? (root.searchResults[modelData].exchange ? root.searchResults[modelData].exchange : "")
-                          : ""
-                        color: Color.muted
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.caption
-                        anchors.verticalCenter: parent.verticalCenter
-                      }
-
-                      Text {
-                        text: modelData < root.searchResults.length
-                          ? (root.searchResults[modelData].description ? root.searchResults[modelData].description : "")
-                          : ""
-                        color: Color.muted
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.caption
-                        elide: Text.ElideRight
-                        width: parent.width - Style.space(100)
-                        anchors.verticalCenter: parent.verticalCenter
-                      }
-                    }
-
-                    MouseArea {
-                      anchors.fill: parent
-                      cursorShape: Qt.PointingHandCursor
-                      onClicked: root.addSymbolFromSearch(modelData)
-                    }
-                  }
-                }
+                text: root.resolvingSymbol ? "Resolving " + root.resolveSymbol + "..."
+                    : root.resolveError ? root.resolveError
+                    : ""
+                color: root.resolveError ? root.redColor : Color.muted
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+                horizontalAlignment: Text.AlignHCenter
+                visible: root.resolvingSymbol || root.resolveError !== ""
               }
             }
           }
@@ -550,9 +546,7 @@ Panel {
                 height: Style.space(44)
                 color: "transparent"
 
-                // Background click handler — opens TradingView chart.
-                // Placed FIRST so it's the bottom z-layer; the × button
-                // on top still receives its own clicks.
+                // Background click — opens TradingView chart
                 MouseArea {
                   anchors.fill: parent
                   acceptedButtons: Qt.LeftButton
@@ -572,7 +566,6 @@ Panel {
                   anchors.rightMargin: Style.space(16)
                   spacing: Style.space(8)
 
-                  // Symbol + description
                   Column {
                     width: Style.space(120)
                     anchors.verticalCenter: parent.verticalCenter
@@ -635,7 +628,7 @@ Panel {
                     anchors.verticalCenter: parent.verticalCenter
                   }
 
-                  // Remove button (×) — on top z-layer, gets clicks first
+                  // Remove button (×)
                   Text {
                     text: "×"
                     color: Color.muted

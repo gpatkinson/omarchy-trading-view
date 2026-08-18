@@ -357,3 +357,70 @@ function lookupScanResult(scanResults, exchange, symbol) {
   if (scanResults[sym]) return scanResults[sym]
   return null
 }
+
+// ---------------------------------------------------------------------------
+// Symbol resolution via scanner
+// ---------------------------------------------------------------------------
+
+// Build a list of {exchange, symbol, screener} candidates to try when the
+// user types a bare ticker like "AAPL" or "BTCUSD". We try common exchanges
+// on the america screener first, then crypto/forex if the ticker looks like
+// a crypto or forex pair.
+function buildResolveQueue(symbol) {
+  symbol = String(symbol || "").toUpperCase()
+  var queue = []
+
+  // Check if it looks like a crypto pair (ends in USD, USDT, BTC, ETH, EUR)
+  var cryptoSuffixes = ["USDT", "USD", "BTC", "ETH", "EUR", "BUSD", "USDC"]
+  var isCrypto = false
+  for (var i = 0; i < cryptoSuffixes.length; i++) {
+    if (symbol.length > cryptoSuffixes[i].length &&
+        symbol.indexOf(cryptoSuffixes[i]) === symbol.length - cryptoSuffixes[i].length) {
+      isCrypto = true
+      break
+    }
+  }
+
+  // Check if it looks like a forex pair (6 chars, all letters, like EURUSD)
+  var isForex = symbol.length === 6 && /^[A-Z]{6}$/.test(symbol)
+
+  if (isCrypto) {
+    // Try common crypto exchanges
+    var cryptoExchanges = ["BINANCE", "BITSTAMP", "COINBASE", "KRAKEN", "BITFINEX"]
+    for (var i = 0; i < cryptoExchanges.length; i++) {
+      queue.push({ exchange: cryptoExchanges[i], symbol: symbol, screener: "crypto" })
+    }
+    return queue
+  }
+
+  if (isForex) {
+    queue.push({ exchange: "OANDA", symbol: symbol, screener: "forex" })
+    queue.push({ exchange: "FX_IDC", symbol: symbol, screener: "forex" })
+    return queue
+  }
+
+  // Stock — try common US exchanges, then a few international ones
+  var stockExchanges = [
+    { exchange: "NASDAQ", screener: "america" },
+    { exchange: "NYSE", screener: "america" },
+    { exchange: "AMEX", screener: "america" },
+    { exchange: "NYSE ARCA", screener: "america" },
+    { exchange: "TSX", screener: "toronto" },
+    { exchange: "LSE", screener: "london" },
+    { exchange: "XETRA", screener: "germany" },
+    { exchange: "EURONEXT", screener: "euronext" },
+    { exchange: "TSE", screener: "japan" },
+    { exchange: "ASX", screener: "australia" },
+    { exchange: "HKEX", screener: "hongkong" }
+  ]
+
+  for (var i = 0; i < stockExchanges.length; i++) {
+    queue.push({
+      exchange: stockExchanges[i].exchange,
+      symbol: symbol,
+      screener: stockExchanges[i].screener
+    })
+  }
+
+  return queue
+}
