@@ -318,11 +318,21 @@ Panel {
             var exchange = parts.length > 1 ? parts[0] : ""
             var symbol = parts.length > 1 ? parts[1] : resolveSymbol
 
-            // Get the description from the scan result
+            // Get the result data (has price, changePct, etc.)
             var result = parsed[foundKey]
-            var description = result.symbol || symbol
+            var description = exchange + ":" + symbol
+            var screener = Model.screenerForExchange(exchange, "")
 
-            addResolvedSymbol(exchange, symbol, Model.screenerForExchange(exchange, ""), description)
+            // Merge the resolve response into scanResults so the price
+            // shows immediately without waiting for the next refresh cycle.
+            var merged = {}
+            for (var mk in root.scanResults) {
+              if (root.scanResults.hasOwnProperty(mk)) merged[mk] = root.scanResults[mk]
+            }
+            merged[foundKey] = result
+            root.scanResults = merged
+
+            addResolvedSymbol(exchange, symbol, screener, description)
           } else {
             // This exchange didn't have it — try next
             tryNextResolve()
