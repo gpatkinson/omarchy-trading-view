@@ -165,7 +165,7 @@ Panel {
       "curl", "-sS", "--max-time", "10",
       "-X", "POST",
       "-H", "Content-Type: application/json",
-      "-H", "User-Agent: tradingview-ta/0.1.0",
+      "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
       "-d", body,
       url
     ]
@@ -258,8 +258,8 @@ Panel {
   function startSearch() {
     var query = searchField.text.trim()
     searchProc.command = ["curl", "-sS", "--max-time", "5",
-      "-H", "User-Agent: tradingview-ta/0.1.0",
-      Model.searchUrl(query, "")]
+      "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+      Model.yahooSearchUrl(query)]
     searchProc.running = true
   }
 
@@ -268,7 +268,7 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        searchResults = Model.parseSymbolSearch(text)
+        searchResults = Model.parseYahooSearch(text)
         selectedResultIndex = 0
         // If user pressed Enter while search was in flight, auto-add first result
         if (root.enterPendingSearch && searchResults.length > 0) {

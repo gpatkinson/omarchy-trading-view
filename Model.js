@@ -1,23 +1,21 @@
 // Model.js — pure parsing/formatting helpers for the TradingView watchlist
 // plugin. No QML imports; imported via `import "Model.js" as Model`.
 //
-// TradingView public endpoints used:
-//   POST https://scanner.tradingview.com/{screener}/scan
+// Data sources:
+//   Symbol search: Yahoo Finance v1/finance/search (no auth, needs User-Agent)
+//     GET https://query1.finance.yahoo.com/v1/finance/search?q=AAPL&quotesCount=5
+//     Returns: {"quotes":[{"symbol":"AAPL","exchange":"NAS","exchDisp":"NASDAQ",
+//               "quoteType":"EQUITY","shortname":"Apple Inc","longname":"Apple Inc."}, ...]}
+//
+//   Price quotes: TradingView scanner (no auth, needs User-Agent)
+//     POST https://scanner.tradingview.com/{screener}/scan
 //     Body: {"symbols":{"tickers":["EXCHANGE:SYMBOL",...]},"columns":["name","close","change","change_abs","volume"]}
 //     Returns: {"data":[{"s":"NASDAQ:AAPL","d":["AAPL",187.32,1.23,0.66,12345678]}, ...]}
-//
-//   GET  https://symbol-search.tradingview.com/symbol_search/?text=AAPL&type=stock
-//     Returns: [{"symbol":"AAPL","exchange":"NASDAQ","type":"stock","description":"Apple Inc.",...}, ...]
-//
-// No auth, no API key, no cookies required for either endpoint.
 
 // ---------------------------------------------------------------------------
 // Watchlist file I/O
 // ---------------------------------------------------------------------------
 
-// Parse the watchlist JSON state file. Returns an array of symbol entries:
-//   [{"symbol":"AAPL","exchange":"NASDAQ","screener":"america","description":"Apple Inc."}, ...]
-// Returns an empty array on any failure (missing file, invalid JSON, etc).
 function parseWatchlistFile(raw) {
   try {
     var data = JSON.parse(String(raw || ""))
@@ -39,7 +37,6 @@ function parseWatchlistFile(raw) {
   }
 }
 
-// Serialize a watchlist array into the JSON string to persist.
 function serializeWatchlist(watchlist) {
   var symbols = []
   for (var i = 0; i < watchlist.length; i++) {
@@ -55,26 +52,30 @@ function serializeWatchlist(watchlist) {
 }
 
 // ---------------------------------------------------------------------------
-// Symbol search
+// Yahoo Finance symbol search parsing
 // ---------------------------------------------------------------------------
 
-// Parse a symbol_search response. Returns an array of candidate entries:
-//   [{"symbol":"AAPL","exchange":"NASDAQ","screener":"america","type":"stock","description":"Apple Inc."}, ...]
+// Parse a Yahoo Finance search response. Returns an array of candidate entries:
+//   [{"symbol":"AAPL","exchange":"NASDAQ","screener":"america","description":"Apple Inc."}, ...]
 // Returns an empty array on failure.
-function parseSymbolSearch(raw) {
+function parseYahooSearch(raw) {
   try {
     var data = JSON.parse(String(raw || ""))
-    if (!Array.isArray(data)) return []
+    if (!data || !Array.isArray(data.quotes)) return []
     var out = []
-    for (var i = 0; i < data.length; i++) {
-      var r = data[i]
-      if (!r || typeof r.symbol !== "string") continue
+    for (var i = 0; i < data.quotes.length; i++) {
+      var q = data.quotes[i]
+      if (!q || typeof q.symbol !== "string") continue
+
+      var exchange = yahooToTvExchange(q.exchange, q.exchDisp, q.quoteType)
+      var screener = screenerForExchange(exchange, q.quoteType)
+      var description = q.longname || q.shortname || ""
+
       out.push({
-        symbol: r.symbol,
-        exchange: typeof r.exchange === "string" ? r.exchange : "",
-        screener: screenerForExchange(r.exchange, r.type),
-        type: typeof r.type === "string" ? r.type : "",
-        description: typeof r.description === "string" ? r.description : ""
+        symbol: q.symbol,
+        exchange: exchange,
+        screener: screener,
+        description: description
       })
     }
     return out
@@ -83,54 +84,147 @@ function parseSymbolSearch(raw) {
   }
 }
 
+// Map Yahoo Finance exchange codes to TradingView exchange names.
+// Yahoo uses short codes like "NAS", "NYQ", "CCC" etc.
+// We also accept the exchDisp (display name) as fallback.
+function yahooToTvExchange(exchange, exchDisp, quoteType) {
+  // Crypto on Yahoo has exchange "CCC" — TradingView uses specific exchanges
+  // like "BINANCE", "BITSTAMP", "COINBASE". For the scanner we'll default to
+  // a reasonable crypto exchange per symbol.
+  if (quoteType === "CRYPTocurrency".substring(0, 6).toUpperCase() || 
+      String(quoteType).toUpperCase() === "CRYPTOCURRENCY") {
+    // For crypto, the symbol itself tells us the pair. Use a generic exchange
+    // that the scanner will resolve. We'll try BINANCE first.
+    return "BINANCE"
+  }
+
+  // Map Yahoo exchange codes to TradingView exchange names
+  var codeMap = {
+    "NAS": "NASDAQ",
+    "NYQ": "NYSE",
+    "ASE": "AMEX",
+    "LSE": "LSE",
+    "TOR": "TSX",
+    "GER": "XETRA",
+    "PAR": "Euronext",
+    "AMS": "Euronext",
+    "BRU": "Euronext",
+    "LIS": "Euronext",
+    "MIL": "BorsaItaliana",
+    "STO": "Stockholmsborsen",
+    "OSL": "OsloBors",
+    "HEL": "NasdaqHelsinki",
+    "CPH": "NasdaqCopenhagen",
+    "ICE": "NasdaqIceland",
+    "TOK": "TSE",
+    "JPX": "TSE",
+    "ASX": "ASX",
+    "NSE": "NSE",
+    "BSE": "BSE",
+    "HKG": "HKEX",
+    "SHH": "SSE",
+    "SHZ": "SZSE",
+    "KSC": "KRX",
+    "TAI": "TWSE",
+    "BUE": "BCBA",
+    "SAO": "B3",
+    "MEX": "BMV"
+  }
+
+  // Try Yahoo exchange code first
+  if (exchange && codeMap[exchange]) return codeMap[exchange]
+
+  // Try exchDisp (display name) — already close to TradingView format
+  if (exchDisp) {
+    var disp = String(exchDisp)
+    // Common display names that map directly
+    var dispMap = {
+      "NASDAQ": "NASDAQ",
+      "NYSE": "NYSE",
+      "NYSE Arca": "NYSE Arca",
+      "AMEX": "AMEX",
+      "London": "LSE",
+      "Toronto": "TSX",
+      "Paris": "Euronext",
+      "Amsterdam": "Euronext",
+      "German": "XETRA",
+      "XETRA": "XETRA",
+      "Milan": "BorsaItaliana",
+      "Stockholm": "Stockholmsborsen",
+      "Oslo": "OsloBors",
+      "Helsinki": "NasdaqHelsinki",
+      "Copenhagen": "NasdaqCopenhagen",
+      "Tokyo": "TSE",
+      "Sydney": "ASX",
+      "NSE": "NSE",
+      "BSE": "BSE",
+      "Hong Kong": "HKEX",
+      "Shanghai": "SSE",
+      "Shenzhen": "SZSE",
+      "Seoul": "KRX",
+      "Taipei": "TWSE",
+      "Buenos Aires": "BCBA",
+      "São Paulo": "B3",
+      "Mexico City": "BMV"
+    }
+    if (dispMap[disp]) return dispMap[disp]
+    // If exchDisp looks like a proper exchange name, use it
+    if (disp.length >= 2 && disp.length <= 20) return disp
+  }
+
+  // Forex
+  if (String(quoteType).toUpperCase() === "CURRENCY" ||
+      String(quoteType).toUpperCase() === "FOREX") {
+    return "OANDA"
+  }
+
+  // ETFs and funds — default to the exchange they're on
+  // If we still don't know, default to NASDAQ for US, empty for others
+  return exchange || "NASDAQ"
+}
+
+// ---------------------------------------------------------------------------
+// Screener mapping
+// ---------------------------------------------------------------------------
+
 // Map a TradingView exchange name to the screener used by the scanner API.
-// The scanner endpoint groups symbols by screener region (e.g. "america",
-// "crypto", "forex"). This mapping covers the most common cases.
 function screenerForExchange(exchange, type) {
   exchange = String(exchange || "").toUpperCase()
-  type = String(type || "").toLowerCase()
+  type = String(type || "").toUpperCase()
 
-  // Crypto and forex have dedicated screeners
-  if (type === "cryptocurrency" || type === "crypto") return "crypto"
-  if (type === "forex" || type === "cfd") return "forex"
+  if (type === "CRYPTOCURRENCY" || type === "CRYPTO") return "crypto"
+  if (type === "CURRENCY" || type === "FOREX" || type === "FX") return "forex"
+  if (type === "CFD") return "forex"
 
-  // Major US exchanges
   var usExchanges = ["NASDAQ", "NYSE", "AMEX", "NYSE ARCA", "BATS", "IEX", "OTC"]
   for (var i = 0; i < usExchanges.length; i++) {
     if (exchange === usExchanges[i]) return "america"
   }
 
-  // European exchanges
   var euMap = {
-    "LSE": "london", "Euronext": "euronext", "XETRA": "germany",
-    "SBF": "france", "BME": "spain", "SIX": "swiss",
-    "BorsaItaliana": "italy", "OMX": "sweden", "OB": "oslo"
+    "LSE": "london", "EURONEXT": "euronext", "XETRA": "germany",
+    "BORSAITALIANA": "italy", "STOCKHOLMSBORSEN": "sweden",
+    "OSLOBORS": "oslo", "NASDAQHELSINKI": "finland",
+    "NASDAQCOPENHAGEN": "denmark", "NASDAQICELAND": "iceland"
   }
   if (euMap[exchange]) return euMap[exchange]
 
-  // Asia-Pacific exchanges
   var apacMap = {
-    "TSE": "japan", "JPX": "japan", "ASX": "australia", "NSE": "india",
-    "BSE": "india", "HKEX": "hongkong", "SSE": "china", "SZSE": "china",
-    "KRX": "korea", "SET": "thailand", "SGX": "singapore", "TWSE": "taiwan"
+    "TSE": "japan", "ASX": "australia", "NSE": "india",
+    "BSE": "india", "HKEX": "hongkong", "SSE": "china",
+    "SZSE": "china", "KRX": "korea", "TWSE": "taiwan"
   }
   if (apacMap[exchange]) return apacMap[exchange]
 
-  // Default to america for unknown stock exchanges (most common for US users)
-  if (type === "stock" || type === "equity" || type === "etf" || type === "fund") return "america"
+  if (type === "EQUITY" || type === "ETF" || type === "MUTUALFUND" || type === "FUND") return "america"
 
-  // Last resort
   return "america"
 }
 
 // ---------------------------------------------------------------------------
-// Scanner response parsing
+// TradingView scanner response parsing
 // ---------------------------------------------------------------------------
 
-// Parse a scanner.tradingview.com/{screener}/scan response.
-// Returns a map of "EXCHANGE:SYMBOL" -> {symbol, price, change, changePct, volume}
-//   {"NASDAQ:AAPL": {"symbol":"AAPL","price":187.32,"change":1.23,"changePct":0.66,"volume":12345678}, ...}
-// Returns an empty object on failure.
 function parseScanResponse(raw) {
   try {
     var data = JSON.parse(String(raw || ""))
@@ -142,9 +236,6 @@ function parseScanResponse(raw) {
       if (!row || typeof row.s !== "string" || !Array.isArray(row.d)) continue
 
       var cols = row.d
-      // Column order matches our request: ["name","close","change","change_abs","volume"]
-      // BUT the actual response order depends on what we request. We parse by index
-      // according to our standard column list defined in Panel.qml.
       // cols[0] = name (symbol without exchange prefix)
       // cols[1] = close (last price)
       // cols[2] = change (percentage)
@@ -169,43 +260,26 @@ function parseScanResponse(raw) {
 // Formatting
 // ---------------------------------------------------------------------------
 
-// Format a price with appropriate decimal places.
-//   187.32  -> "187.32"
-//   0.56    -> "0.56"
-//   1234.56 -> "1,234.56"
 function formatPrice(price) {
   if (price === null || price === undefined || isNaN(price)) return "--"
-  // Use up to 2 decimal places, stripping trailing zeros for clean display
   var str = price.toFixed(2)
-  // Add thousands separators
   var parts = str.split(".")
   parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",")
   return parts.join(".")
 }
 
-// Format a percentage change with sign and arrow.
-//   1.23  -> "+1.23%"
-//   -0.5  -> "-0.50%"
-//   0.0   -> "0.00%"
 function formatChangePct(pct) {
   if (pct === null || pct === undefined || isNaN(pct)) return "--"
   var sign = pct > 0 ? "+" : ""
   return sign + pct.toFixed(2) + "%"
 }
 
-// Format absolute price change with sign.
-//   1.23  -> "+1.23"
-//   -0.50 -> "-0.50"
 function formatChangeAbs(abs) {
   if (abs === null || abs === undefined || isNaN(abs)) return "--"
   var sign = abs > 0 ? "+" : ""
   return sign + abs.toFixed(2)
 }
 
-// Format volume with K/M/B suffixes.
-//   12345678  -> "12.35M"
-//   1234      -> "1.23K"
-//   1234567890 -> "1.23B"
 function formatVolume(vol) {
   if (vol === null || vol === undefined || isNaN(vol)) return "--"
   if (vol >= 1e9) return (vol / 1e9).toFixed(2) + "B"
@@ -214,8 +288,6 @@ function formatVolume(vol) {
   return String(Math.round(vol))
 }
 
-// Get arrow glyph based on change direction.
-//   positive -> "▲"  negative -> "▼"  zero/unknown -> "▬"
 function changeArrow(pct) {
   if (pct === null || pct === undefined || isNaN(pct)) return "▬"
   if (pct > 0) return "▲"
@@ -227,8 +299,6 @@ function changeArrow(pct) {
 // URL generation
 // ---------------------------------------------------------------------------
 
-// Build the TradingView chart URL for a symbol.
-//   ("NASDAQ", "AAPL") -> "https://www.tradingview.com/chart/?symbol=NASDAQ:AAPL"
 function chartUrl(exchange, symbol) {
   var ex = String(exchange || "").toUpperCase()
   var sym = String(symbol || "").toUpperCase()
@@ -237,14 +307,10 @@ function chartUrl(exchange, symbol) {
   return "https://www.tradingview.com/"
 }
 
-// Build the scanner API URL for a given screener.
-//   "america" -> "https://scanner.tradingview.com/america/scan"
 function scannerUrl(screener) {
   return "https://scanner.tradingview.com/" + String(screener || "america") + "/scan"
 }
 
-// Build the JSON body for a scanner POST request.
-//   ["NASDAQ:AAPL", "NYSE:JPM"] -> '{"symbols":{"tickers":["NASDAQ:AAPL","NYSE:JPM"],"query":{"types":[]}},"columns":["name","close","change","change_abs","volume"]}'
 function scannerBody(tickers) {
   return JSON.stringify({
     symbols: { tickers: tickers, query: { types: [] } },
@@ -252,20 +318,15 @@ function scannerBody(tickers) {
   })
 }
 
-// Build the symbol search URL with query params (GET).
-//   ("AAPL", "stock") -> "https://symbol-search.tradingview.com/symbol_search/?text=AAPL&type=stock"
-function searchUrl(query, type) {
-  var url = "https://symbol-search.tradingview.com/symbol_search/?text=" + encodeURIComponent(query)
-  if (type && type !== "") url += "&type=" + encodeURIComponent(type)
-  return url
+// Yahoo Finance search URL — needs a browser User-Agent to avoid 403/rate-limit.
+function yahooSearchUrl(query) {
+  return "https://query1.finance.yahoo.com/v1/finance/search?q=" + encodeURIComponent(query) + "&quotesCount=5"
 }
 
 // ---------------------------------------------------------------------------
 // Grouping helpers
 // ---------------------------------------------------------------------------
 
-// Group watchlist entries by their screener, returning a map:
-//   {"america": ["NASDAQ:AAPL", "NYSE:JPM"], "crypto": ["BINANCE:BTCUSDT"]}
 function groupByScreener(watchlist) {
   var groups = {}
   for (var i = 0; i < watchlist.length; i++) {
@@ -278,8 +339,6 @@ function groupByScreener(watchlist) {
   return groups
 }
 
-// Merge scan results from multiple screener responses into a single map.
-// Each response is the raw output of parseScanResponse().
 function mergeScanResults(results) {
   var merged = {}
   for (var i = 0; i < results.length; i++) {
@@ -291,14 +350,10 @@ function mergeScanResults(results) {
   return merged
 }
 
-// Look up a scan result for a watchlist entry, trying multiple key formats.
-// Some scanner responses use "EXCHANGE:SYMBOL" while others just use "SYMBOL".
 function lookupScanResult(scanResults, exchange, symbol) {
   var ex = exchange ? exchange.toUpperCase() : ""
   var sym = symbol ? symbol.toUpperCase() : ""
-  // Try "EXCHANGE:SYMBOL" first
   if (ex && scanResults[ex + ":" + sym]) return scanResults[ex + ":" + sym]
-  // Try just "SYMBOL"
   if (scanResults[sym]) return scanResults[sym]
   return null
 }
