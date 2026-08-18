@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.gpatkinson.trading-view",
+  "name": "TradingView Watchlist",
+  "version": "0.1.0",
+  "author": "gpatkinson",
+  "license": "MIT",
+  "description": "Stock/crypto/forex watchlist pill with TradingView deep-link from the bar.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "TradingView",
+    "description": "Watchlist with daily change and click-to-open chart in browser.",
+    "category": "Finance",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {},
+    "schema": []
+  }
+}
