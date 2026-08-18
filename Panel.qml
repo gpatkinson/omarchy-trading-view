@@ -165,6 +165,7 @@ Panel {
       "curl", "-sS", "--max-time", "10",
       "-X", "POST",
       "-H", "Content-Type: application/json",
+      "-H", "User-Agent: tradingview-ta/0.1.0",
       "-d", body,
       url
     ]
@@ -257,6 +258,7 @@ Panel {
   function startSearch() {
     var query = searchField.text.trim()
     searchProc.command = ["curl", "-sS", "--max-time", "5",
+      "-H", "User-Agent: tradingview-ta/0.1.0",
       Model.searchUrl(query, "")]
     searchProc.running = true
   }
