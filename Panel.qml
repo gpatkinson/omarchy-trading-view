@@ -165,8 +165,6 @@ Panel {
       "curl", "-sS", "--max-time", "10",
       "-X", "POST",
       "-H", "Content-Type: application/json",
-      "-H", "Origin: https://www.tradingview.com",
-      "-H", "Referer: https://www.tradingview.com/",
       "-d", body,
       url
     ]
@@ -257,10 +255,12 @@ Panel {
   }
 
   function startSearch() {
+    var query = searchField.text.trim()
     searchProc.command = ["curl", "-sS", "--max-time", "5",
-      "-H", "Origin: https://www.tradingview.com",
-      "-H", "Referer: https://www.tradingview.com/",
-      Model.searchUrl(searchField.text.trim(), "")]
+      "-X", "POST",
+      "-H", "Content-Type: application/x-www-form-urlencoded",
+      Model.searchUrl(),
+      "-d", Model.searchBody(query, "")]
     searchProc.running = true
   }
 

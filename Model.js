@@ -252,12 +252,18 @@ function scannerBody(tickers) {
   })
 }
 
-// Build the symbol search URL.
-//   ("AAPL", "stock") -> "https://symbol-search.tradingview.com/symbol_search/?text=AAPL&type=stock"
-function searchUrl(query, type) {
-  var url = "https://symbol-search.tradingview.com/symbol_search/?text=" + encodeURIComponent(query)
-  if (type && type !== "") url += "&type=" + encodeURIComponent(type)
-  return url
+// Build the symbol search URL (POST endpoint, params in body).
+//   "AAPL" -> "https://symbol-search.tradingview.com/symbol_search"
+function searchUrl() {
+  return "https://symbol-search.tradingview.com/symbol_search"
+}
+
+// Build the POST body for a symbol search request.
+//   ("AAPL", "stock") -> "text=AAPL&type=stock"
+function searchBody(query, type) {
+  var body = "text=" + encodeURIComponent(query)
+  if (type && type !== "") body += "&type=" + encodeURIComponent(type)
+  return body
 }
 
 // ---------------------------------------------------------------------------
