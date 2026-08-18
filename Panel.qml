@@ -69,6 +69,7 @@ Panel {
   property var searchResults: []
   property int selectedResultIndex: 0
   property string searchQuery: ""
+  property bool enterPendingSearch: false  // true when user hit Enter before results arrived
   // UI state
   property bool loading: false
   readonly property int maxSymbols: 10
@@ -161,9 +162,11 @@ Panel {
     var url = Model.scannerUrl(screener)
 
     fetchProc.command = [
-      "curl", "-fsS", "--max-time", "10",
+      "curl", "-sS", "--max-time", "10",
       "-X", "POST",
       "-H", "Content-Type: application/json",
+      "-H", "Origin: https://www.tradingview.com",
+      "-H", "Referer: https://www.tradingview.com/",
       "-d", body,
       url
     ]
@@ -238,6 +241,7 @@ Panel {
     searchResults = []
     selectedResultIndex = 0
     searchQuery = ""
+    enterPendingSearch = false
     searchDebounce.stop()
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
   }
@@ -253,7 +257,9 @@ Panel {
   }
 
   function startSearch() {
-    searchProc.command = ["curl", "-fsS", "--max-time", "5",
+    searchProc.command = ["curl", "-sS", "--max-time", "5",
+      "-H", "Origin: https://www.tradingview.com",
+      "-H", "Referer: https://www.tradingview.com/",
       Model.searchUrl(searchField.text.trim(), "")]
     searchProc.running = true
   }
@@ -265,6 +271,13 @@ Panel {
       onStreamFinished: {
         searchResults = Model.parseSymbolSearch(text)
         selectedResultIndex = 0
+        // If user pressed Enter while search was in flight, auto-add first result
+        if (root.enterPendingSearch && searchResults.length > 0) {
+          root.enterPendingSearch = false
+          root.addSymbolFromSearch(0)
+        } else {
+          root.enterPendingSearch = false
+        }
       }
     }
   }
@@ -441,8 +454,15 @@ Panel {
                 placeholderText: "Search symbol (e.g. AAPL, BTCUSD, EURUSD)..."
                 onTextChanged: searchDebounce.restart()
                 onAccepted: {
-                  if (root.searchResults.length > 0)
+                  if (root.searchResults.length > 0) {
                     root.addSymbolFromSearch(root.selectedResultIndex)
+                  } else {
+                    // No results yet — fire search immediately, auto-add
+                    // first result when search completes
+                    searchDebounce.stop()
+                    root.enterPendingSearch = true
+                    root.requestSearch()
+                  }
                 }
                 Keys.onDownPressed: {
                   if (root.selectedResultIndex < root.searchResults.length - 1)
