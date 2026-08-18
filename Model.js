@@ -385,11 +385,20 @@ function buildResolveQueue(symbol) {
   var isForex = symbol.length === 6 && /^[A-Z]{6}$/.test(symbol)
 
   if (isCrypto) {
-    // Try common crypto exchanges
-    var cryptoExchanges = ["BINANCE", "BITSTAMP", "COINBASE", "KRAKEN", "BITFINEX"]
+    // Binance uses USDT pairs, not USD. If the user typed BTCUSD, also try
+    // BTCUSDT on Binance. BITSTAMP/COINBASE/KRAKEN use USD pairs.
+    var cryptoExchanges = ["BITSTAMP", "COINBASE", "KRAKEN", "BITFINEX"]
     for (var i = 0; i < cryptoExchanges.length; i++) {
       queue.push({ exchange: cryptoExchanges[i], symbol: symbol, screener: "crypto" })
     }
+    // Binance: try the original symbol, then swap USD->USDT if applicable
+    queue.push({ exchange: "BINANCE", symbol: symbol, screener: "crypto" })
+    if (symbol.length > 3 && symbol.indexOf("USD") === symbol.length - 3 && symbol.indexOf("USDT") === -1) {
+      var usdtVariant = symbol.substring(0, symbol.length - 3) + "USDT"
+      queue.push({ exchange: "BINANCE", symbol: usdtVariant, screener: "crypto" })
+    }
+    // Also try PAXOS and TYCNNEX which sometimes have BTCUSD
+    queue.push({ exchange: "PAXOS", symbol: symbol, screener: "crypto" })
     return queue
   }
 
