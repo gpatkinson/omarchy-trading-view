@@ -217,6 +217,7 @@ Panel {
   property var resolveQueue: []
   property string resolveSymbol: ""
   property string resolveType: ""
+  property string resolveScreener: ""  // screener from the successful candidate
 
   function startAddSymbol() {
     addingSymbol = true
@@ -233,6 +234,7 @@ Panel {
     resolvingSymbol = false
     resolveError = ""
     resolveQueue = []
+    resolveScreener = ""
     searchDebounce.stop()
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
   }
@@ -271,6 +273,8 @@ Panel {
 
     var candidate = resolveQueue[0]
     resolveQueue = resolveQueue.slice(1)
+    // Store the current candidate so onStreamFinished can access its screener
+    resolveScreener = candidate.screener
 
     var ticker = candidate.exchange + ":" + candidate.symbol
     var body = Model.scannerBody([ticker])
@@ -321,7 +325,7 @@ Panel {
             // Get the result data (has price, changePct, etc.)
             var result = parsed[foundKey]
             var description = exchange + ":" + symbol
-            var screener = Model.screenerForExchange(exchange, "")
+            var screener = root.resolveScreener
 
             // Merge the resolve response into scanResults so the price
             // shows immediately without waiting for the next refresh cycle.

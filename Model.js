@@ -196,6 +196,19 @@ function screenerForExchange(exchange, type) {
   if (type === "CURRENCY" || type === "FOREX" || type === "FX") return "forex"
   if (type === "CFD") return "forex"
 
+  // Known crypto exchanges (even without type hint)
+  var cryptoExchanges = ["BINANCE", "BITSTAMP", "COINBASE", "KRAKEN",
+                         "BITFINEX", "PAXOS", "BITTREX", "GEMINI", "FTX"]
+  for (var c = 0; c < cryptoExchanges.length; c++) {
+    if (exchange === cryptoExchanges[c]) return "crypto"
+  }
+
+  // Known forex exchanges
+  var forexExchanges = ["OANDA", "FX_IDC", "SAXO", "ICMARKETS"]
+  for (var f = 0; f < forexExchanges.length; f++) {
+    if (exchange === forexExchanges[f]) return "forex"
+  }
+
   var usExchanges = ["NASDAQ", "NYSE", "AMEX", "NYSE ARCA", "BATS", "IEX", "OTC"]
   for (var i = 0; i < usExchanges.length; i++) {
     if (exchange === usExchanges[i]) return "america"
