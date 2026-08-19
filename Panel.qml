@@ -132,7 +132,18 @@ Panel {
 
   function startNextFetch() {
     if (fetchQueue.length === 0) {
-      scanResults = Model.mergeScanResults(fetchResultsAccumulator)
+      // All fetches complete — merge NEW data INTO existing scanResults
+      // so symbols whose fetch failed keep their last-known price
+      // instead of going blank.
+      var fresh = Model.mergeScanResults(fetchResultsAccumulator)
+      var merged = {}
+      for (var k in root.scanResults) {
+        if (root.scanResults.hasOwnProperty(k)) merged[k] = root.scanResults[k]
+      }
+      for (var k2 in fresh) {
+        if (fresh.hasOwnProperty(k2)) merged[k2] = fresh[k2]
+      }
+      root.scanResults = merged
       loading = false
       fetchResultsAccumulator = []
       return
