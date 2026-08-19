@@ -64,7 +64,7 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "\uf3a5"
+    text: "\uf201"
     slotSize: Style.bar.statusSlot
     tooltipText: "TradingView Watchlist"
 
