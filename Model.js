@@ -215,7 +215,7 @@ function screenerForExchange(exchange, type) {
   }
 
   var euMap = {
-    "LSE": "london", "EURONEXT": "euronext", "XETRA": "germany",
+    "LSE": "london", "EURONEXT": "global", "XETRA": "germany",
     "BORSAITALIANA": "italy", "STOCKHOLMSBORSEN": "sweden",
     "OSLOBORS": "oslo", "NASDAQHELSINKI": "finland",
     "NASDAQCOPENHAGEN": "denmark", "NASDAQICELAND": "iceland"
@@ -430,7 +430,7 @@ function buildResolveQueue(symbol) {
     { exchange: "TSX", screener: "toronto" },
     { exchange: "LSE", screener: "london" },
     { exchange: "XETRA", screener: "germany" },
-    { exchange: "EURONEXT", screener: "euronext" },
+    { exchange: "EURONEXT", screener: "global" },
     { exchange: "TSE", screener: "japan" },
     { exchange: "ASX", screener: "australia" },
     { exchange: "HKEX", screener: "hongkong" }
