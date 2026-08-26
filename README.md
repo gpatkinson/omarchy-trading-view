@@ -15,6 +15,7 @@ An [Omarchy Quattro](https://github.com/basecamp/omarchy) bar widget that puts a
 - **Auto-refresh every 15 minutes** — prices stay current without hammering the API
 - **Local watchlist persistence** — your symbols are stored at `~/.local/state/omarchy/settings/trading-view.json` and survive restarts
 - **Add/remove symbols** through the panel UI — no config file editing required
+- **Drag to reorder** — grab the `⋮⋮` handle on the left of any row and drag it up or down. The new order is written to the watchlist file on drop.
 
 ## How it works
 
