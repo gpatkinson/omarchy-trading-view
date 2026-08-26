@@ -109,6 +109,14 @@ Panel {
 
   // ---- Data fetching (price quotes) ----
 
+  // Header button: fetch right now instead of waiting out the 15-minute timer.
+  // Guarded because refresh() drives a single Process through a queue, so a
+  // second run started mid-flight would stomp the first one's command.
+  function refreshNow() {
+    if (loading || watchlist.length === 0) return
+    refresh()
+  }
+
   function refresh() {
     if (watchlist.length === 0) return
     fetchRetries = 0
@@ -544,12 +552,28 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
               }
 
-              Text {
-                text: root.loading ? " ⟳" : ""
-                color: Color.muted
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
+              // Refresh now. Disabled while a fetch is in flight, which also
+              // clears the hover fill, so the spin below reads as just the
+              // glyph turning rather than the whole button.
+              PanelActionButton {
+                id: refreshButton
+                iconText: "\uf021"
+                tooltipText: root.loading ? "Refreshing…" : "Refresh prices now"
+                foreground: root.barForeground
+                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontSize: Style.font.caption
+                enabled: !root.loading && root.watchlist.length > 0
                 anchors.verticalCenter: parent.verticalCenter
+                onClicked: root.refreshNow()
+
+                RotationAnimation on rotation {
+                  running: root.loading
+                  loops: Animation.Infinite
+                  from: 0
+                  to: 360
+                  duration: 900
+                  onStopped: refreshButton.rotation = 0
+                }
               }
             }
 
@@ -626,7 +650,11 @@ Panel {
                 id: rowItem
                 width: listContainer.width
                 height: root.rowHeight
-                z: root.dragIndex === index ? 2 : 1
+                z: dragging ? 2 : 1
+
+                // Named so nested components can test it without reaching for
+                // `index`, which an inner Repeater shadows.
+                readonly property bool dragging: root.dragIndex === index
 
                 // Slot this row occupies right now: unchanged when idle, and
                 // during a drag shifted by one to open a gap at dropIndex.
@@ -638,12 +666,12 @@ Panel {
                   return (index >= root.dropIndex && index < root.dragIndex) ? index + 1 : index
                 }
 
-                y: root.dragIndex === index ? root.dragY : slot * root.rowHeight
+                y: dragging ? root.dragY : slot * root.rowHeight
                 // Only the neighbours animate, and only mid-drag: on drop every
                 // row snaps straight to its final slot instead of animating a
                 // row that now holds different data back to the old position.
                 Behavior on y {
-                  enabled: root.dragIndex >= 0 && root.dragIndex !== index
+                  enabled: root.dragIndex >= 0 && !rowItem.dragging
                   NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
                 }
 
@@ -654,7 +682,7 @@ Panel {
                   anchors.rightMargin: Style.space(8)
                   radius: Style.space(6)
                   color: Color.foreground
-                  opacity: root.dragIndex === index ? 0.1 : 0
+                  opacity: rowItem.dragging ? 0.1 : 0
                   Behavior on opacity { NumberAnimation { duration: 120 } }
                 }
 
@@ -679,25 +707,44 @@ Panel {
                   anchors.rightMargin: Style.space(16)
                   spacing: Style.space(8)
 
-                  // Drag handle — press and drag to reorder
-                  Text {
+                  // Drag handle — press and drag to reorder. The six dots are
+                  // drawn rather than typed so the gap between the two columns
+                  // is an exact spacing token instead of a font glyph advance.
+                  Item {
                     id: dragHandle
-                    text: "⋮⋮"
-                    color: root.dragIndex === index ? root.barForeground : Color.muted
-                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                    font.pixelSize: Style.font.subtitle
+                    width: dots.implicitWidth + Style.space(6)
+                    height: parent.height
                     opacity: root.watchlist.length < 2 ? 0.15
-                           : (handleArea.containsMouse || root.dragIndex === index) ? 1.0 : 0.45
-                    anchors.verticalCenter: parent.verticalCenter
+                           : (handleArea.containsMouse || rowItem.dragging) ? 1.0 : 0.45
+
+                    Grid {
+                      id: dots
+                      anchors.centerIn: parent
+                      columns: 2
+                      rowSpacing: Style.space(3)
+                      columnSpacing: Style.space(2)
+
+                      readonly property int dotSize: Style.space(2)
+
+                      Repeater {
+                        model: 6
+
+                        Rectangle {
+                          width: dots.dotSize
+                          height: dots.dotSize
+                          radius: width / 2
+                          color: rowItem.dragging ? root.barForeground : Color.muted
+                        }
+                      }
+                    }
 
                     MouseArea {
                       id: handleArea
                       anchors.fill: parent
-                      anchors.margins: -Style.space(4)
                       hoverEnabled: true
                       enabled: root.watchlist.length > 1
                       preventStealing: true
-                      cursorShape: root.dragIndex === index ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                      cursorShape: rowItem.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
 
                       // Distance from the pointer to the top of the grabbed row,
                       // so the row keeps its position under the cursor.
@@ -708,7 +755,7 @@ Panel {
                         root.beginDrag(index, rowItem.y)
                       }
                       onPositionChanged: function (mouse) {
-                        if (root.dragIndex !== index) return
+                        if (!rowItem.dragging) return
                         root.updateDrag(mapToItem(listContainer, mouse.x, mouse.y).y - grabOffset)
                       }
                       onReleased: root.endDrag()

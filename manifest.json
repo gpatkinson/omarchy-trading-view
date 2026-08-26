@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.gpatkinson.trading-view",
   "name": "TradingView Watchlist",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "gpatkinson",
   "license": "MIT",
   "description": "Stock/crypto/forex watchlist pill with TradingView deep-link from the bar.",
