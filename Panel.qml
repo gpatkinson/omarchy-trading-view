@@ -880,19 +880,6 @@ Panel {
               wrapMode: Text.WordWrap
             }
           }
-
-          // ---- Footer hint ----
-          Text {
-            width: parent.width
-            text: "Click a symbol to open its chart in your browser · 15-min refresh"
-            color: Color.muted
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.caption
-            horizontalAlignment: Text.AlignHCenter
-            opacity: 0.6
-            topPadding: Style.space(4)
-            bottomPadding: Style.space(8)
-          }
         }
       }
     }
