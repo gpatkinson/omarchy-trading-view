@@ -68,6 +68,7 @@ Panel {
   // UI state
   property bool loading: false
   readonly property int maxSymbols: 10
+  readonly property int rowHeight: Style.space(44)
   readonly property color greenColor: "#22c55e"
   readonly property color redColor: "#ef4444"
   readonly property color mutedColor: Color.muted
@@ -107,6 +108,14 @@ Panel {
   Process { id: watchlistSaveProc }
 
   // ---- Data fetching (price quotes) ----
+
+  // Header button: fetch right now instead of waiting out the 15-minute timer.
+  // Guarded because refresh() drives a single Process through a queue, so a
+  // second run started mid-flight would stomp the first one's command.
+  function refreshNow() {
+    if (loading || watchlist.length === 0) return
+    refresh()
+  }
 
   function refresh() {
     if (watchlist.length === 0) return
@@ -410,6 +419,56 @@ Panel {
     persistWatchlist()
   }
 
+  // ---- Drag reordering ----
+  // dragIndex is the watchlist index the pointer picked up; dropIndex is the
+  // slot it would land in if released now. Rows derive their visual position
+  // from the pair, so nothing is written to the watchlist until the drop.
+
+  property int dragIndex: -1
+  property int dropIndex: -1
+  property real dragY: 0
+
+  function beginDrag(index, startY) {
+    if (watchlist.length < 2) return
+    if (index < 0 || index >= watchlist.length) return
+    dragIndex = index
+    dropIndex = index
+    dragY = startY
+  }
+
+  function updateDrag(y) {
+    if (dragIndex < 0) return
+    var maxY = (watchlist.length - 1) * rowHeight
+    dragY = Math.max(0, Math.min(y, maxY))
+    var slot = Math.round(dragY / rowHeight)
+    dropIndex = Math.max(0, Math.min(slot, watchlist.length - 1))
+  }
+
+  function endDrag() {
+    if (dragIndex < 0) return
+    var from = dragIndex
+    var to = dropIndex
+    dragIndex = -1
+    dropIndex = -1
+    moveSymbol(from, to)
+  }
+
+  function cancelDrag() {
+    dragIndex = -1
+    dropIndex = -1
+  }
+
+  function moveSymbol(from, to) {
+    if (from === to) return
+    if (from < 0 || from >= watchlist.length) return
+    to = Math.max(0, Math.min(to, watchlist.length - 1))
+    var list = watchlist.slice()
+    var moved = list.splice(from, 1)[0]
+    list.splice(to, 0, moved)
+    watchlist = list
+    persistWatchlist()
+  }
+
   // ---- Open in browser ----
 
   function openInBrowser(exchange, symbol) {
@@ -465,7 +524,7 @@ Panel {
         contentHeight: contentColumn.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
-        interactive: contentHeight > height
+        interactive: contentHeight > height && root.dragIndex < 0
 
         Column {
           id: contentColumn
@@ -493,12 +552,28 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
               }
 
-              Text {
-                text: root.loading ? " ⟳" : ""
-                color: Color.muted
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
+              // Refresh now. Disabled while a fetch is in flight, which also
+              // clears the hover fill, so the spin below reads as just the
+              // glyph turning rather than the whole button.
+              PanelActionButton {
+                id: refreshButton
+                iconText: "\uf021"
+                tooltipText: root.loading ? "Refreshing…" : "Refresh prices now"
+                foreground: root.barForeground
+                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontSize: Style.font.caption
+                enabled: !root.loading && root.watchlist.length > 0
                 anchors.verticalCenter: parent.verticalCenter
+                onClicked: root.refreshNow()
+
+                RotationAnimation on rotation {
+                  running: root.loading
+                  loops: Animation.Infinite
+                  from: 0
+                  to: 360
+                  duration: 900
+                  onStopped: refreshButton.rotation = 0
+                }
               }
             }
 
@@ -559,23 +634,64 @@ Panel {
           }
 
           // ---- Watchlist rows ----
-          Repeater {
-            model: root.watchlist.length
+          // Rows are positioned by index inside a fixed-height container rather
+          // than stacked in a Column, so a dragged row can travel past its
+          // neighbours while they slide into the slot it left behind.
+          Item {
+            id: listContainer
+            width: parent.width
+            height: root.watchlist.length * root.rowHeight
+            visible: root.watchlist.length > 0
 
-            Column {
-              width: scroll.width
-              spacing: 0
+            Repeater {
+              model: root.watchlist.length
 
-              Rectangle {
-                width: parent.width
-                height: Style.space(44)
-                color: "transparent"
+              Item {
+                id: rowItem
+                width: listContainer.width
+                height: root.rowHeight
+                z: dragging ? 2 : 1
+
+                // Named so nested components can test it without reaching for
+                // `index`, which an inner Repeater shadows.
+                readonly property bool dragging: root.dragIndex === index
+
+                // Slot this row occupies right now: unchanged when idle, and
+                // during a drag shifted by one to open a gap at dropIndex.
+                readonly property int slot: {
+                  if (root.dragIndex < 0) return index
+                  if (index === root.dragIndex) return root.dropIndex
+                  if (root.dragIndex < root.dropIndex)
+                    return (index > root.dragIndex && index <= root.dropIndex) ? index - 1 : index
+                  return (index >= root.dropIndex && index < root.dragIndex) ? index + 1 : index
+                }
+
+                y: dragging ? root.dragY : slot * root.rowHeight
+                // Only the neighbours animate, and only mid-drag: on drop every
+                // row snaps straight to its final slot instead of animating a
+                // row that now holds different data back to the old position.
+                Behavior on y {
+                  enabled: root.dragIndex >= 0 && !rowItem.dragging
+                  NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
+                }
+
+                // Lift the dragged row off the list
+                Rectangle {
+                  anchors.fill: parent
+                  anchors.leftMargin: Style.space(8)
+                  anchors.rightMargin: Style.space(8)
+                  radius: Style.space(6)
+                  color: Color.foreground
+                  opacity: rowItem.dragging ? 0.1 : 0
+                  Behavior on opacity { NumberAnimation { duration: 120 } }
+                }
 
                 // Background click — opens TradingView chart
                 MouseArea {
                   anchors.fill: parent
                   acceptedButtons: Qt.LeftButton
                   cursorShape: Qt.PointingHandCursor
+                  enabled: root.dragIndex < 0
                   onClicked: {
                     if (root.watchlist[index]) {
                       var entry = root.watchlist[index]
@@ -591,7 +707,64 @@ Panel {
                   anchors.rightMargin: Style.space(16)
                   spacing: Style.space(8)
 
+                  // Drag handle — press and drag to reorder. The six dots are
+                  // drawn rather than typed so the gap between the two columns
+                  // is an exact spacing token instead of a font glyph advance.
+                  Item {
+                    id: dragHandle
+                    width: dots.implicitWidth + Style.space(6)
+                    height: parent.height
+                    opacity: root.watchlist.length < 2 ? 0.15
+                           : (handleArea.containsMouse || rowItem.dragging) ? 1.0 : 0.45
+
+                    Grid {
+                      id: dots
+                      anchors.centerIn: parent
+                      columns: 2
+                      rowSpacing: Style.space(3)
+                      columnSpacing: Style.space(2)
+
+                      readonly property int dotSize: Style.space(2)
+
+                      Repeater {
+                        model: 6
+
+                        Rectangle {
+                          width: dots.dotSize
+                          height: dots.dotSize
+                          radius: width / 2
+                          color: rowItem.dragging ? root.barForeground : Color.muted
+                        }
+                      }
+                    }
+
+                    MouseArea {
+                      id: handleArea
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      enabled: root.watchlist.length > 1
+                      preventStealing: true
+                      cursorShape: rowItem.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+
+                      // Distance from the pointer to the top of the grabbed row,
+                      // so the row keeps its position under the cursor.
+                      property real grabOffset: 0
+
+                      onPressed: function (mouse) {
+                        grabOffset = mapToItem(listContainer, mouse.x, mouse.y).y - rowItem.y
+                        root.beginDrag(index, rowItem.y)
+                      }
+                      onPositionChanged: function (mouse) {
+                        if (!rowItem.dragging) return
+                        root.updateDrag(mapToItem(listContainer, mouse.x, mouse.y).y - grabOffset)
+                      }
+                      onReleased: root.endDrag()
+                      onCanceled: root.cancelDrag()
+                    }
+                  }
+
                   Column {
+                    id: nameColumn
                     width: Style.space(120)
                     anchors.verticalCenter: parent.verticalCenter
 
@@ -614,10 +787,16 @@ Panel {
                   }
 
                   // Spacer
-                  Item { width: parent.width - Style.space(120) - Style.space(140) - Style.space(28); height: 1 }
+                  Item {
+                    height: 1
+                    width: Math.max(0, row.width - dragHandle.width - nameColumn.width
+                                       - priceText.width - changeText.width - removeText.width
+                                       - 5 * row.spacing)
+                  }
 
                   // Price
                   Text {
+                    id: priceText
                     text: {
                       if (!root.watchlist[index]) return "--"
                       var entry = root.watchlist[index]
@@ -632,6 +811,7 @@ Panel {
 
                   // Change %
                   Text {
+                    id: changeText
                     text: {
                       if (!root.watchlist[index]) return "▬ --"
                       var entry = root.watchlist[index]
@@ -655,6 +835,7 @@ Panel {
 
                   // Remove button (×)
                   Text {
+                    id: removeText
                     text: "×"
                     color: Color.muted
                     font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -664,19 +845,21 @@ Panel {
                     MouseArea {
                       anchors.fill: parent
                       cursorShape: Qt.PointingHandCursor
+                      enabled: root.dragIndex < 0
                       onClicked: root.removeSymbol(index)
                     }
                   }
                 }
-              }
 
-              // Separator line
-              Rectangle {
-                width: parent.width
-                height: 1
-                color: Color.muted
-                opacity: 0.15
-                visible: index < root.watchlist.length - 1
+                // Separator line
+                Rectangle {
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.bottom: parent.bottom
+                  height: 1
+                  color: Color.muted
+                  opacity: root.dragIndex < 0 && rowItem.slot < root.watchlist.length - 1 ? 0.15 : 0
+                }
               }
             }
           }
@@ -696,19 +879,6 @@ Panel {
               horizontalAlignment: Text.AlignHCenter
               wrapMode: Text.WordWrap
             }
-          }
-
-          // ---- Footer hint ----
-          Text {
-            width: parent.width
-            text: "Click a symbol to open its chart in your browser · 15-min refresh"
-            color: Color.muted
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.caption
-            horizontalAlignment: Text.AlignHCenter
-            opacity: 0.6
-            topPadding: Style.space(4)
-            bottomPadding: Style.space(8)
           }
         }
       }
