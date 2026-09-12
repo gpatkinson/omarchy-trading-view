@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
@@ -499,6 +500,19 @@ Panel {
     owner: root.barIdentity
     bar: root.bar
     open: root.opened
+
+    // WORKAROUND: bypass the Exclusive->OnDemand keyboard-focus prime.
+    // The prime exists for hotkey-summon (SUPER+CTRL+W) support, but when it
+    // wedges (observed on multi-window workspaces), the full-screen overlay
+    // surface stays mapped holding an input grab and the session appears
+    // frozen until the shell restarts. Trading the keyboard prime for
+    // OnDemand-when-open keeps outside-click dismissal working and removes
+    // the grab entirely. Cost: keyboard nav (Esc/arrows) in the panel no
+    // longer receives focus — acceptable for a mouse-driven watchlist.
+    WlrLayershell.keyboardFocus: root.opened
+      ? WlrKeyboardFocus.OnDemand
+      : WlrKeyboardFocus.None
+
     centerOnBar: false
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(360))
