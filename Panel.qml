@@ -36,7 +36,12 @@ Panel {
 
   function close() {
     setCenterHoverRevealSuppressed(false)
-    if (addingSymbol) cancelAddSymbol()
+    if (addingSymbol) cancelAddSymbol(true)
+    // Drop Qt focus from the search field before the surface hides: a
+    // focused TextField holds a Wayland text-input (IME) session, and
+    // letting the surface die with that session active can wedge the
+    // seat's keyboard routing compositor-wide (frozen workspace bug).
+    if (searchField) searchField.focus = false
     root.controller.hide()
   }
 
@@ -250,13 +255,18 @@ Panel {
     })
   }
 
-  function cancelAddSymbol() {
+  function cancelAddSymbol(closing) {
     addingSymbol = false
     resolvingSymbol = false
     resolveError = ""
     resolveQueue = []
     resolveScreener = ""
     searchDebounce.stop()
+    // Do NOT re-grab keyboard focus while the panel is closing: the
+    // Qt.callLater lands after controller.hide() and re-focuses an item
+    // inside the dying window, which pins the layer-shell surface mapped
+    // and starves every other window of input (the "frozen workspace" bug).
+    if (closing) return
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
   }
 
