@@ -171,7 +171,7 @@ Panel {
     var url = Model.scannerUrl(screener)
 
     fetchProc.command = [
-      "curl", "-sS", "--max-time", "10",
+      "curl", "-sS", "--max-time", "10", "--max-filesize", "1048576",
       "-X", "POST",
       "-H", "Content-Type: application/json",
       "-d", body,
@@ -301,7 +301,7 @@ Panel {
     var url = Model.scannerUrl(candidate.screener)
 
     resolveProc.command = [
-      "curl", "-sS", "--max-time", "5",
+      "curl", "-sS", "--max-time", "5", "--max-filesize", "1048576",
       "-X", "POST",
       "-H", "Content-Type: application/json",
       "-d", body,
