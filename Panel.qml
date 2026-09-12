@@ -743,7 +743,6 @@ Panel {
                       anchors.fill: parent
                       hoverEnabled: true
                       enabled: root.watchlist.length > 1
-                      preventStealing: true
                       cursorShape: rowItem.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
 
                       // Distance from the pointer to the top of the grabbed row,
